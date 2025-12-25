@@ -1,0 +1,9 @@
+transformers==4.47.1
+torch==2.5.1 --index-url https://download.pytorch.org/whl/cpu
+
+aiokafka==0.12.0
+python-binance==1.0.19
+praw==7.7.1
+pydantic==2.5.3
+pydantic-settings==2.1.0
+loguru==0.7.2

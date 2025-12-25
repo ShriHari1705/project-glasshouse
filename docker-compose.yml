@@ -1,0 +1,100 @@
+services:
+  # --- INFRASTRUCTURE ZONE ---
+  
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:latest
+    container_name: glasshouse-redpanda
+    command:
+      - redpanda start
+      - --overprovisioned
+      - --smp 1
+      - --memory 1G
+      - --reserve-memory 0M
+      - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr internal://redpanda:9092,external://localhost:19092
+    ports:
+      - "19092:19092"
+      - "9092:9092"
+    healthcheck:
+      test: ["CMD", "rpk", "cluster", "info"]
+      interval: 5s
+      timeout: 10s
+      retries: 5
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    container_name: glasshouse-clickhouse
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    environment:
+      - CLICKHOUSE_DB=glasshouse
+      - CLICKHOUSE_USER=admin
+      - CLICKHOUSE_PASSWORD=password
+    volumes:
+      - ./infra/clickhouse_init.sql:/docker-entrypoint-initdb.d/init.sql
+      - clickhouse_data:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "localhost:8123/ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # --- INGESTION ZONE ---
+
+  crypto-producer:
+    build: 
+      context: .
+      dockerfile: core/producers/crypto/Dockerfile
+    container_name: producer-crypto
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - KAFKA_BROKERS=redpanda:9092
+    volumes:
+      - ./logs:/app/logs
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    healthcheck:
+      # DataSimp Standard: Heartbeat check
+      test: ["CMD-SHELL", "find /tmp/heartbeat -mmin -0.5 | grep ."]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  social-producer:
+    build: 
+      context: .
+      dockerfile: core/producers/social/Dockerfile
+    container_name: producer-social
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - KAFKA_BROKERS=redpanda:9092
+      - REDDIT_CLIENT_ID=${REDDIT_CLIENT_ID}
+      - REDDIT_CLIENT_SECRET=${REDDIT_CLIENT_SECRET}
+    volumes:
+      - ./logs:/app/logs
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "find /tmp/heartbeat_social -mmin -0.5 | grep ."]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+  
+  sentiment-worker:
+    build:
+      context: .
+      dockerfile: core/processors/sentiment/Dockerfile
+    container_name: worker-sentiment
+    environment:
+      - KAFKA_BROKERS=redpanda:9092
+    depends_on:
+      redpanda:
+        condition: service_healthy
+
+volumes:
+  clickhouse_data:

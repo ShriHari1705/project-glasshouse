@@ -1,66 +1,51 @@
-import asyncio
 import json
-import os
-from datetime import datetime
-from loguru import logger
-from pydantic import BaseModel, ValidationError, field_validator
+import asyncio
+from websockets import connect
 from aiokafka import AIOKafkaProducer
-from binance import AsyncClient, BinanceSocketManager
+from pydantic import BaseModel, Field, field_validator
+from loguru import logger
 
-# 1. Validation Schema
 class BinanceTrade(BaseModel):
-    symbol: str = "BTCUSDT"
-    price: float
-    quantity: float
-    timestamp: datetime
-    trade_id: int
+    symbol: str = Field(alias='s')
+    price: float = Field(alias='p')
+    quantity: float = Field(alias='q')
+    timestamp: int = Field(alias='T')
 
     @field_validator('price', 'quantity', mode='before')
-    def parse_float(cls, v):
+    def validate_floats(cls, v):
         try:
             return float(v)
-        except (ValueError, TypeError):
-            raise ValueError("Must be a valid float")
+        except ValueError:
+            raise ValueError(f"Invalid numeric value: {v}")
 
-# 2. Setup Error Logging
-logger.add("/app/logs/ingestion_errors.log", filter=lambda record: record["level"].name == "ERROR")
-
-async def produce_trades():
-    # Kafka Producer Setup
-    producer = AIOKafkaProducer(bootstrap_servers=os.getenv("KAFKA_BROKERS", "localhost:9092"))
+async def stream_binance():
+    producer = AIOKafkaProducer(bootstrap_servers='redpanda:9092')
     await producer.start()
     
-    # Binance Setup
-    client = await AsyncClient.create()
-    bm = BinanceSocketManager(client)
-    ts = bm.aggtrade_socket('BTCUSDT')
-
-    logger.info("Connection established. Starting Binance aggTrade stream...")
+    url = "wss://stream.binance.com:9443/ws/btcusdt@aggTrade"
     
-    async with ts as tscm:
+    async with connect(url) as websocket:
+        logger.info("Connected to Binance Firehose")
         while True:
-            msg = await tscm.recv()
             try:
-                # Map Binance raw keys to our Schema
-                trade_data = BinanceTrade(
-                    symbol=msg['s'],
-                    price=msg['p'],
-                    quantity=msg['q'],
-                    timestamp=datetime.fromtimestamp(msg['E'] / 1000.0),
-                    trade_id=msg['a']
+                data = await websocket.recv()
+                raw_json = json.loads(data)
+                
+                # Validation Step
+                trade = BinanceTrade(**raw_json)
+                
+                await producer.send_and_wait(
+                    "market.trades", 
+                    trade.model_dump_json().encode('utf-8')
                 )
-                
-                # Async Kafka Push
-                await producer.send("trades_raw", trade_data.model_dump_json().encode('utf-8'))
-                
-                # Update Health Heartbeat (DataSimp Standard)
-                with open("/tmp/heartbeat", "w") as f:
-                    f.write(str(datetime.now().timestamp()))
-
-            except (ValidationError, KeyError) as e:
-                logger.error(f"Validation Failed: {e} | Raw Msg: {msg}")
+                # Heartbeat for Health Check
+                with open("/tmp/heartbeat_crypto", "w") as f:
+                    f.write(str(asyncio.get_event_loop().time()))
+                    
             except Exception as e:
-                logger.critical(f"System Failure: {e}")
+                logger.error(f"Ingestion Error: {e}")
+                with open("/app/logs/ingestion_errors.log", "a") as f:
+                    f.write(f"{raw_json}\n")
 
 if __name__ == "__main__":
-    asyncio.run(produce_trades())
+    asyncio.run(stream_binance())

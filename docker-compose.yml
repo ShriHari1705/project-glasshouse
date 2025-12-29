@@ -42,48 +42,26 @@ services:
 
   # --- INGESTION ZONE ---
 
-  crypto-producer:
-    build: 
-      context: .
-      dockerfile: core/producers/crypto/Dockerfile
+  producer-crypto:
+    build: ./core/producers/crypto
     container_name: producer-crypto
-    restart: unless-stopped
-    env_file: .env
-    environment:
-      - KAFKA_BROKERS=redpanda:9092
-    volumes:
-      - ./logs:/app/logs
-    depends_on:
-      redpanda:
-        condition: service_healthy
     healthcheck:
-      # DataSimp Standard: Heartbeat check
-      test: ["CMD-SHELL", "find /tmp/heartbeat -mmin -0.5 | grep ."]
-      interval: 10s
-      timeout: 5s
+      test: ["CMD-SHELL", "find /tmp/heartbeat_crypto -mmin -0.5"]
+      interval: 30s
+      timeout: 10s
       retries: 3
+    restart: always
 
-  social-producer:
-    build: 
-      context: .
-      dockerfile: core/producers/social/Dockerfile
+  producer-social:
+    build: ./core/producers/social
     container_name: producer-social
-    restart: unless-stopped
-    env_file: .env
-    environment:
-      - KAFKA_BROKERS=redpanda:9092
-      - REDDIT_CLIENT_ID=${REDDIT_CLIENT_ID}
-      - REDDIT_CLIENT_SECRET=${REDDIT_CLIENT_SECRET}
-    volumes:
-      - ./logs:/app/logs
-    depends_on:
-      redpanda:
-        condition: service_healthy
+    command: python rss_producer.py
     healthcheck:
-      test: ["CMD-SHELL", "find /tmp/heartbeat_social -mmin -0.5 | grep ."]
-      interval: 10s
-      timeout: 5s
+      test: ["CMD-SHELL", "find /tmp/heartbeat_social -mmin -1.5"]
+      interval: 60s
+      timeout: 10s
       retries: 3
+    restart: always
   
   sentiment-worker:
     build:
@@ -108,7 +86,14 @@ services:
       redpanda:
         condition: service_healthy      
         
-        
+  dashboard:
+    build: ./core/ui
+    container_name: glasshouse-dashboard
+    ports:
+      - "8501:8501"
+    depends_on:
+      - clickhouse
+    restart: always      
 
 volumes:
   clickhouse_data:

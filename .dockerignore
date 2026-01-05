@@ -1,0 +1,15 @@
+# Ignore local python environments and caches
+*/core/processors/sentiment/model_weights/
+**/.venv/
+**/venv/
+**/__pycache__/
+*.pyc
+.git/
+glass/
+
+# Ignore data volumes
+**/clickhouse_data/
+**/redpanda_data/
+
+# DO NOT ignore the weights here globally. 
+# We will rely on Docker's build context instead.

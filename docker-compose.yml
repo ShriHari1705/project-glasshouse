@@ -36,15 +36,21 @@ services:
       - clickhouse_data:/var/lib/clickhouse
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "localhost:8123/ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
+      interval: 10s    # Check every 10s instead of 5s
+      timeout: 10s     # Give it 10s to respond
+      retries: 10      # Try 10 times (total 100 seconds) before failing
+      start_period: 20s
 
   # --- INGESTION ZONE ---
 
   producer-crypto:
-    build: ./core/producers/crypto
+    build: 
+      context: .
+      dockerfile: ./core/producers/crypto/Dockerfile
     container_name: producer-crypto
+    depends_on:
+      redpanda:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "find /tmp/heartbeat_crypto -mmin -0.5"]
       interval: 30s
@@ -53,9 +59,14 @@ services:
     restart: always
 
   producer-social:
-    build: ./core/producers/social
+    build: 
+      context: .
+      dockerfile: ./core/producers/social/Dockerfile
     container_name: producer-social
     command: python rss_producer.py
+    depends_on:
+      redpanda:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "find /tmp/heartbeat_social -mmin -1.5"]
       interval: 60s
@@ -66,14 +77,19 @@ services:
   sentiment-worker:
     build:
       context: .
-      dockerfile: core/processors/sentiment/Dockerfile
+      dockerfile: ./core/processors/sentiment/Dockerfile
+    volumes:
+      - H:/MSc/model_weights:/app/model_weights:ro
     container_name: worker-sentiment
-    environment:
-      - KAFKA_BROKERS=redpanda:9092
+    restart: always
     depends_on:
       redpanda:
         condition: service_healthy
-        
+      clickhouse:
+        condition: service_healthy
+    environment:
+      - TRANSFORMERS_OFFLINE=1
+      - PYTHONUNBUFFERED=1
         
   console:
     image: docker.redpanda.com/redpandadata/console:latest
@@ -87,12 +103,15 @@ services:
         condition: service_healthy      
         
   dashboard:
-    build: ./core/ui
+    build: 
+      context: .
+      dockerfile: ./core/ui/Dockerfile
     container_name: glasshouse-dashboard
     ports:
       - "8501:8501"
     depends_on:
-      - clickhouse
+      clickhouse:
+        condition: service_healthy
     restart: always      
 
 volumes:

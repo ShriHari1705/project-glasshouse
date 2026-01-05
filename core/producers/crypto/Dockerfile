@@ -20,7 +20,7 @@ WORKDIR /app
 # Copy only the installed packages from the builder stage
 COPY --from=builder /root/.local /root/.local
 # Copy the source code
-COPY . .
+COPY ./core/producers/crypto/main.py .
 
 # Ensure scripts can find the installed packages
 ENV PATH=/root/.local/bin:$PATH
@@ -30,4 +30,4 @@ ENV PYTHONUNBUFFERED=1
 RUN touch /tmp/heartbeat && touch /tmp/heartbeat_social
 
 # Run the producer
-CMD ["python", "core/producers/crypto/main.py"]
+CMD ["python", "main.py"]

@@ -1,60 +1,74 @@
 import streamlit as st
-import clickhouse_connect
 import pandas as pd
-import time
-from datetime import datetime, timedelta
+import clickhouse_connect
+from loguru import logger
 
-st.set_page_config(page_title="Glasshouse Live Monitor", layout="wide")
+CH_HOST = "clickhouse"
+CH_USER = "admin"
+CH_PASS = "password"
+CH_DB = "glasshouse"
 
-# Connect to ClickHouse
+st.set_page_config(page_title="Glasshouse Monitor", layout="wide")
+st.title("Glasshouse:Real-Time Market & Sentiment")
+
 @st.cache_resource
-def get_ch_client():
-    return clickhouse_connect.get_client(host='clickhouse', port=8123, username='admin', password='password')
-
-client = get_ch_client()
-
-st.title("Glasshouse: Price vs. Sentiment")
-
-# Sidebar for controls
-refresh_rate = st.sidebar.slider("Refresh Rate (seconds)", 1, 10, 5)
-
-# Layout: Two columns for KPIs
-col1, col2, col3 = st.columns(3)
+def get_client():
+    return clickhouse_connect.get_client(
+        host=CH_HOST,
+        username=CH_USER,
+        password=CH_PASS,
+        database=CH_DB
+    )
 
 def fetch_data():
-    # Fetch Price Data (Last 5 mins)
-    price_query = "SELECT timestamp, price FROM glasshouse.trades_silver WHERE timestamp > now() - INTERVAL 5 MINUTE ORDER BY timestamp DESC"
-    df_price = client.query_df(price_query)
-    
-    # Fetch Sentiment Data (Last 5 mins)
-    sent_query = "SELECT created_utc as timestamp, sentiment_score FROM glasshouse.social_enriched WHERE created_utc > now() - INTERVAL 5 MINUTE ORDER BY created_utc DESC"
+    client = get_client()
+    sent_query = """
+    SELECT 
+        timestamp,
+        sentiment_score,
+        headline,
+        sentiment_label
+    FROM 
+        glasshouse.social_enriched
+    ORDER BY 
+        timestamp DESC
+    LIMIT 100
+    """
+    price_query="""
+    SELECT
+        timestamp,
+        price
+    FROM glasshouse.trades_silver
+    ORDER BY timestamp DESC
+    LIMIT 500
+    """
+
     df_sent = client.query_df(sent_query)
+    df_price = client.query_df(price_query)
+    return df_sent, df_price
+
+try:
+    df_p,df_s = fetch_data()
+    col1,col2 = st.columns9([2,1])
+    with col1:
+        st.subheader("Price Movement (BTC/USDT)")
+        if not df_p.empty:
+            st.line_chart(df_p.set_index('timestamp'))
+        else:
+            st.info("Waiting for price data...")
     
-    return df_price, df_sent
-
-# Main Loop
-placeholder = st.empty()
-
-while True:
-    df_p, df_s = fetch_data()
-    
-    with placeholder.container():
-        # 1. Update Metrics
-        avg_price = df_p['price'].mean() if not df_p.empty else 0
-        avg_sent = df_s['sentiment_score'].mean() if not df_s.empty else 0.5
-        
-        col1.metric("Live BTC Price", f"${avg_price:,.2f}")
-        col2.metric("Market Sentiment", f"{avg_sent:.2f}", delta=f"{avg_sent - 0.5:.2f}")
-        col3.metric("Last Data Sync", datetime.now().strftime("%H:%M:%S"))
-
-        # 2. Visualization
-        st.subheader("Price Movement (Last 5 Minutes)")
-        st.line_chart(df_p.set_index('timestamp'))
-
-        st.subheader("Latest Scored News")
+    with col2:
+        st.subheader("Recent Sentiment")
         if not df_s.empty:
-            st.table(df_s.head(5))
+            st.dataframe(df_s[['timestamp','headline','sentiment_label']], hide_index=True)
+            avg_sent = df_s['sentiment_score'].mean()
+            st.metric("Average Sentiment Score (last 100)", f"{avg_sent:.2f}")
         else:
             st.info("Waiting for sentiment scores...")
 
-    time.sleep(refresh_rate)
+except Exception as e:
+    logger.error(f"Error fetching data: {e}")
+    st.error("An error occurred while fetching data. Please try again later.")
+
+if st.button("Refresh Data"):
+    st.rerun()
